@@ -538,3 +538,74 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hegel_props {
+    use super::Densify;
+    use crate::utils::hegel_gens::{monotone_line_strings, polygons_with_holes};
+    use crate::{Distance, Euclidean, Length};
+    use hegel::generators::{self, PrintableGenerator};
+
+    fn max_segment_lengths() -> impl PrintableGenerator<f64> {
+        generators::floats::<f64>().min_value(0.1).max_value(1e4)
+    }
+
+    // "Creates a copy of the geometry with additional points inserted as
+    // necessary to ensure there is never more than `max_segment_length` between
+    // points."
+    #[hegel::test]
+    fn no_densified_segment_is_longer_than_the_maximum(tc: hegel::TestCase) {
+        let line_string = tc.draw(monotone_line_strings(1e4, 12));
+        let max_segment_length = tc.draw(max_segment_lengths());
+        for line in Euclidean.densify(&line_string, max_segment_length).lines() {
+            let length = Euclidean.distance(line.start, line.end);
+            assert!(
+                length <= max_segment_length * (1.0 + 1e-9),
+                "segment of length {length} exceeds the maximum {max_segment_length}"
+            );
+        }
+    }
+
+    // Densifying only inserts points, so the original vertices survive in
+    // order: each segment's `start_point` is pushed unmodified, and the final
+    // coordinate is pushed to finish.
+    #[hegel::test]
+    fn densifying_keeps_the_original_vertices_in_order(tc: hegel::TestCase) {
+        let line_string = tc.draw(monotone_line_strings(1e4, 12));
+        let max_segment_length = tc.draw(max_segment_lengths());
+        let densified = Euclidean.densify(&line_string, max_segment_length);
+        let mut remaining = densified.0.iter();
+        for coord in &line_string.0 {
+            assert!(
+                remaining.any(|candidate| candidate == coord),
+                "{densified:?} does not contain the vertices of {line_string:?} in order"
+            );
+        }
+    }
+
+    // Inserted points sit on the segment they subdivide, so the Euclidean
+    // length is unchanged.
+    #[hegel::test]
+    fn densifying_preserves_euclidean_length(tc: hegel::TestCase) {
+        let line_string = tc.draw(monotone_line_strings(1e4, 12));
+        let max_segment_length = tc.draw(max_segment_lengths());
+        let densified = Euclidean.densify(&line_string, max_segment_length);
+        assert_relative_eq!(
+            Euclidean.length(&densified),
+            Euclidean.length(&line_string),
+            max_relative = 1e-9
+        );
+    }
+
+    // A polygon is densified ring by ring, so its holes survive and every ring
+    // stays closed.
+    #[hegel::test]
+    fn densifying_a_polygon_keeps_its_rings_closed(tc: hegel::TestCase) {
+        let polygon = tc.draw(polygons_with_holes());
+        let max_segment_length = tc.draw(max_segment_lengths());
+        let densified = Euclidean.densify(&polygon, max_segment_length);
+        assert_eq!(densified.interiors().len(), polygon.interiors().len());
+        assert!(densified.exterior().is_closed());
+        assert!(densified.interiors().iter().all(|ring| ring.is_closed()));
+    }
+}
